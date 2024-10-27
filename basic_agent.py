@@ -21,9 +21,12 @@ os.environ["OPENAI_API_KEY"] = api_key
 # Set the max token limit
 MAX_TOKENS = 4096
 
+# Define the path for the Chroma database
+persist_directory = os.path.join(os.getcwd(), "chroma_db")
+
 # Initialize the Chroma vector store
 embeddings = OpenAIEmbeddings()
-vectordb = Chroma("my_agent_db", embeddings)
+vectordb = Chroma(persist_directory=persist_directory, embedding_function=embeddings)
 
 # Initialize tokenizer
 tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
@@ -49,6 +52,9 @@ def summarize_conversation(conversation, new_input):
 # Initialize the conversation buffer memory
 memory = ConversationBufferMemory()
 
+# After initializing vectordb
+print(f"Chroma database initialized. Number of elements: {vectordb._collection.count()}")
+
 def interact_with_agent(user_input):
     """Interacts with the agent and manages conversation history."""
     try:
@@ -63,6 +69,9 @@ def interact_with_agent(user_input):
         new_text = updated_conversation.split("\n")[-1]  # Get only the latest addition
         texts = text_splitter.split_text(new_text)
         vectordb.add_texts(texts)
+
+        # Print the number of elements in the database after adding new texts
+        print(f"Added new texts. Number of elements: {vectordb._collection.count()}")
 
         # Retrieve relevant past conversations
         db_size = len(vectordb.get())  # Get the current size of the database
@@ -95,6 +104,9 @@ def interact_with_agent(user_input):
 
         # Update the conversation buffer with the response
         memory.save_context({"input": user_input}, {"output": response})
+
+        # After adding new texts or performing a search, persist the database
+        vectordb.persist()
 
         return response
     except Exception as e:
