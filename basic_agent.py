@@ -10,6 +10,8 @@ from langchain.tools import Tool
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import ConversationChain
+import shutil
+import argparse
 
 # Get the OpenAI API key from the environment
 api_key = os.environ.get('OPENAI_API_KEY')
@@ -19,17 +21,31 @@ if not api_key:
 os.environ["OPENAI_API_KEY"] = api_key
 
 # Set the max token limit
-MAX_TOKENS = 4096
+MAX_TOKENS = 16384  # For GPT-4 32k version
 
 # Define the path for the Chroma database
 persist_directory = os.path.join(os.getcwd(), "chroma_db")
 
-# Initialize the Chroma vector store
-embeddings = OpenAIEmbeddings()
-vectordb = Chroma(persist_directory=persist_directory, embedding_function=embeddings)
+def initialize_database(clear=False):
+    if clear and os.path.exists(persist_directory):
+        shutil.rmtree(persist_directory)
+        print(f"Cleared existing database at {persist_directory}")
+    
+    embeddings = OpenAIEmbeddings()
+    vectordb = Chroma(persist_directory=persist_directory, embedding_function=embeddings)
+    print(f"Chroma database initialized. Number of elements: {vectordb._collection.count()}")
+    return vectordb
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Run the AI agent with optional database clearing.")
+parser.add_argument('--clear-db', action='store_true', help='Clear the existing database before initializing')
+args = parser.parse_args()
+
+# Initialize the database (clear only if --clear-db flag is set)
+vectordb = initialize_database(clear=args.clear_db)
 
 # Initialize tokenizer
-tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+tokenizer = tiktoken.encoding_for_model("gpt-4o")
 
 def count_tokens(text):
     """Count the number of tokens in a string."""
@@ -52,9 +68,6 @@ def summarize_conversation(conversation, new_input):
 # Initialize the conversation buffer memory
 memory = ConversationBufferMemory()
 
-# After initializing vectordb
-print(f"Chroma database initialized. Number of elements: {vectordb._collection.count()}")
-
 def interact_with_agent(user_input):
     """Interacts with the agent and manages conversation history."""
     try:
@@ -64,13 +77,11 @@ def interact_with_agent(user_input):
         # Summarize and manage the conversation
         updated_conversation = summarize_conversation(conversation, user_input)
 
-        # Add only the new information to the vector database
+        # Add new information to the vector database
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         new_text = updated_conversation.split("\n")[-1]  # Get only the latest addition
         texts = text_splitter.split_text(new_text)
         vectordb.add_texts(texts)
-
-        # Print the number of elements in the database after adding new texts
         print(f"Added new texts. Number of elements: {vectordb._collection.count()}")
 
         # Retrieve relevant past conversations
@@ -94,7 +105,7 @@ def interact_with_agent(user_input):
 
         # Create the conversation chain
         conversation = ConversationChain(
-            llm=ChatOpenAI(temperature=0),
+            llm=ChatOpenAI(model_name="gpt-4o", temperature=0, max_tokens=MAX_TOKENS),
             prompt=prompt,
             memory=ConversationBufferMemory(return_messages=True)
         )
@@ -105,8 +116,9 @@ def interact_with_agent(user_input):
         # Update the conversation buffer with the response
         memory.save_context({"input": user_input}, {"output": response})
 
-        # After adding new texts or performing a search, persist the database
+        # Persist the database after each interaction
         vectordb.persist()
+        print(f"Database persisted. Number of elements: {vectordb._collection.count()}")
 
         return response
     except Exception as e:
@@ -118,3 +130,11 @@ while True:
     user_input = input("You: ")
     response = interact_with_agent(user_input)
     print(f"Agent: {response}")
+
+# At the end of your script, after the main loop
+vectordb.persist()
+print(f"Final database state. Number of elements: {vectordb._collection.count()}")
+
+if __name__ == "__main__":
+    # Your main loop or function calls here
+    pass
