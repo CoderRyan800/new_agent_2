@@ -200,6 +200,11 @@ def interact_with_agent(user_input):
             )
 
         # Get response from agent
+        logging.info("\n=== FULL CONTEXT FOR AGENT ===")
+        logging.info(f"Number of relevant history items: {len(relevant_history)}")
+        logging.info(f"Full context being sent to agent:\n{full_context}")
+        logging.info("================================")
+
         conversation = ConversationChain(
             llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
             prompt=ChatPromptTemplate.from_messages([
@@ -225,6 +230,11 @@ def interact_with_agent(user_input):
                          for entry in existing_entries)
 
         if not is_duplicate:
+            logging.info("\n=== STORING NEW UNIQUE INTERACTION ===")
+            logging.info(f"Interaction Hash: {interaction_hash}")
+            logging.info(f"New Interaction:\n{new_interaction}")
+            logging.info("====================================")
+            
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             texts = text_splitter.split_text(new_interaction)
             metadatas = [{
