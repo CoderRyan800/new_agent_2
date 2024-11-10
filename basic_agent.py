@@ -20,6 +20,10 @@ import logging
 from datetime import datetime
 import time
 
+# Constants
+MAX_CONVERSATION_TOKENS = 8000
+MODEL_SELECTION = "gpt-4o"
+
 # Define log filename with timestamp (using UTC)
 LOG_FILENAME = f"agent_conversation_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_UTC.log"
 
@@ -40,7 +44,7 @@ if not api_key:
 os.environ["OPENAI_API_KEY"] = api_key
 
 try:
-    tokenizer = tiktoken.encoding_for_model("gpt-4")
+    tokenizer = tiktoken.encoding_for_model(MODEL_SELECTION)
 except Exception as e:
     logging.error(f"Failed to initialize tokenizer: {str(e)}", exc_info=True)
     raise RuntimeError("Critical: Failed to initialize tokenizer")
@@ -123,9 +127,9 @@ def log_memory_stats():
         
         logging.info("=== DETAILED MEMORY STATISTICS ===")
         logging.info(f"Memory Allocation (32K total):")
-        logging.info(f"├── Current buffer: {messages_tokens:,} tokens ({(messages_tokens/32000*100):.1f}%)")
-        logging.info(f"├── Summary buffer: {summary_tokens:,} tokens ({(summary_tokens/32000*100):.1f}%)")
-        logging.info(f"└── Total usage: {total_tokens:,} tokens ({(total_tokens/32000*100):.1f}%)")
+        logging.info(f"├── Current buffer: {messages_tokens:,} tokens ({(messages_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
+        logging.info(f"├── Summary buffer: {summary_tokens:,} tokens ({(summary_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
+        logging.info(f"└── Total usage: {total_tokens:,} tokens ({(total_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
         
         logging.info("\nMessage Buffer Analysis:")
         if isinstance(current_messages, list):
@@ -156,8 +160,8 @@ def signal_handler(sig, frame):
 # Initialize memory
 try:
     memory = ConversationSummaryBufferMemory(
-        llm=ChatOpenAI(model_name="gpt-4", temperature=0),
-        max_token_limit=32000,
+        llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
+        max_token_limit=MAX_CONVERSATION_TOKENS,
         return_messages=True,
         memory_key="history"
     )
@@ -197,7 +201,7 @@ def interact_with_agent(user_input):
 
         # Get response from agent
         conversation = ConversationChain(
-            llm=ChatOpenAI(model_name="gpt-4", temperature=0),
+            llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
             prompt=ChatPromptTemplate.from_messages([
                 ("system", "You are a helpful AI assistant with perfect memory recall."),
                 MessagesPlaceholder(variable_name="history"),
