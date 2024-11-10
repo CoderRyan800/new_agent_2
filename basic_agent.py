@@ -26,7 +26,7 @@ LOG_FILENAME = f"agent_conversation_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')
 # Set up logging with UTC timestamp and custom formatter
 class CustomFormatter(logging.Formatter):
     def format(self, record):
-        return f"\n{datetime.utcnow().strftime('%d/%m/%Y UTC %H:%M:%S')} - {record.levelname} - {record.getMessage()}\n"
+        return f"[{datetime.utcnow().strftime('%d/%m/%Y UTC %H:%M:%S')}] - {record.levelname} - {record.getMessage()}"
 
 # Set up logging
 handler = logging.FileHandler(LOG_FILENAME)
@@ -116,6 +116,9 @@ def log_memory_stats():
         summary_tokens = count_tokens(str(moving_summary))
         total_tokens = messages_tokens + summary_tokens
         
+        if total_tokens > 4000:  # About 12.5% of 32K
+            logging.warning("MEMORY SUMMARIZATION TRIGGERED - Token usage exceeds threshold")
+            
         logging.info("=== DETAILED MEMORY STATISTICS ===")
         logging.info(f"Memory Allocation (32K total):")
         logging.info(f"├── Current buffer: {messages_tokens:,} tokens ({(messages_tokens/32000*100):.1f}%)")
