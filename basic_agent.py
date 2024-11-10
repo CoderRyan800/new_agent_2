@@ -1,7 +1,7 @@
 from langchain.agents import create_react_agent, AgentExecutor
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationSummaryBufferMemory
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
@@ -61,12 +61,13 @@ def count_tokens(text):
         return 0
 
 def safe_persist_database():
-    """Safely persist the database with error handling."""
+    """Check database state with error handling."""
     try:
-        vectordb.persist()
-        logging.info(f"Database successfully persisted. Elements: {vectordb._collection.count()}")
+        # Note: Persistence is now automatic in Chroma 0.4.x
+        count = vectordb._collection.count()
+        logging.info(f"Database state checked. Elements: {count}")
     except Exception as e:
-        logging.error(f"Error persisting database: {str(e)}", exc_info=True)
+        logging.error(f"Error checking database: {str(e)}", exc_info=True)
 
 def initialize_database(clear=False):
     """Initialize the vector database with proper error handling."""
@@ -116,17 +117,15 @@ def log_memory_stats():
         summary_tokens = count_tokens(str(moving_summary))
         total_tokens = messages_tokens + summary_tokens
         
+        # Memory summarization threshold for testing
         if total_tokens > 4000:  # About 12.5% of 32K
             logging.warning("MEMORY SUMMARIZATION TRIGGERED - Token usage exceeds threshold")
-            
+        
         logging.info("=== DETAILED MEMORY STATISTICS ===")
         logging.info(f"Memory Allocation (32K total):")
         logging.info(f"├── Current buffer: {messages_tokens:,} tokens ({(messages_tokens/32000*100):.1f}%)")
         logging.info(f"├── Summary buffer: {summary_tokens:,} tokens ({(summary_tokens/32000*100):.1f}%)")
         logging.info(f"└── Total usage: {total_tokens:,} tokens ({(total_tokens/32000*100):.1f}%)")
-        
-        if total_tokens > 24000:  # 75% warning
-            logging.warning("Token usage above 75% of capacity")
         
         logging.info("\nMessage Buffer Analysis:")
         if isinstance(current_messages, list):
@@ -135,23 +134,16 @@ def log_memory_stats():
                 logging.info(f"Message {idx}: {msg_tokens:,} tokens")
         
         logging.info(f"\nMoving Summary ({summary_tokens} tokens):")
-        logging.info(moving_summary)
+        logging.info(f"{moving_summary}\n")
         
     except Exception as e:
-        logging.error(f"Error in memory stats logging: {str(e)}", exc_info=True)
+        logging.error(f"Error logging memory stats: {str(e)}", exc_info=True)
 
 def cleanup():
-    """Enhanced cleanup with proper error handling."""
-    logging.info("Starting cleanup process...")
+    """Cleanup function for graceful shutdown."""
     try:
         safe_persist_database()
-        logging.info("Final memory state:")
-        log_memory_stats()
-        
-        for handler in logging.root.handlers[:]:
-            handler.close()
-            logging.root.removeHandler(handler)
-            
+        logging.info("Cleanup completed successfully")
     except Exception as e:
         print(f"Error during cleanup: {str(e)}")
 
@@ -238,12 +230,10 @@ def interact_with_agent(user_input):
             } for _ in texts]
             
             vectordb.add_texts(texts, metadatas=metadatas)
-            safe_persist_database()
             
             if not verify_database_entry(new_interaction):
                 logging.error("Failed to verify database entry - attempting retry")
                 vectordb.add_texts(texts, metadatas=metadatas)
-                safe_persist_database()
 
         # Update conversation memory
         memory.save_context({"input": user_input}, {"output": response})
@@ -257,11 +247,6 @@ def interact_with_agent(user_input):
     except Exception as e:
         logging.error(f"Error in interaction: {str(e)}", exc_info=True)
         return "I'm sorry, but I encountered an error while processing your request."
-    finally:
-        try:
-            safe_persist_database()
-        except Exception as e:
-            logging.error(f"Error in final persistence: {str(e)}", exc_info=True)
 
 # Set up signal handlers
 signal.signal(signal.SIGINT, signal_handler)
@@ -278,7 +263,7 @@ if __name__ == "__main__":
                 
             if user_input.lower() in ['exit', 'quit', 'bye']:
                 print("\nGoodbye!")
-                safe_persist_database()
+                cleanup()
                 break
                 
             response = interact_with_agent(user_input)
@@ -290,4 +275,3 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Main loop error: {str(e)}", exc_info=True)
             print("\nAn error occurred. Please try again.")
-            safe_persist_database()
