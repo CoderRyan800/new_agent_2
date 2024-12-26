@@ -80,9 +80,14 @@ class AgentManager:
         self.agent = self.create_agent()
         
     def create_memory(self):
+        """Create a conversation memory using the new API."""
+        from langchain.memory import ChatMessageHistory
+        
         return ConversationBufferMemory(
             memory_key="chat_history",
-            return_messages=True
+            return_messages=True,
+            chat_memory=ChatMessageHistory(),
+            output_key="output"
         )
     
     def create_agent(self):
@@ -237,7 +242,7 @@ Thought: {agent_scratchpad}"""
             logging.info("=== DETAILED MEMORY STATISTICS ===")
             logging.info(f"Memory Allocation (32K total):")
             logging.info(f"├── Current buffer: {messages_tokens:,} tokens ({(messages_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
-            logging.info(f"├── Summary buffer: {summary_tokens:,} tokens ({(summary_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
+            logging.info(f"���── Summary buffer: {summary_tokens:,} tokens ({(summary_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
             logging.info(f"└── Total usage: {total_tokens:,} tokens ({(total_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
             
             logging.info("\nMessage Buffer Analysis:")
