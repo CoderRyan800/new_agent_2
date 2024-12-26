@@ -1,6 +1,6 @@
 from langchain.agents import create_react_agent, AgentExecutor
 from langchain_openai import ChatOpenAI
-from langchain.memory import ConversationSummaryBufferMemory
+from langchain.memory import ConversationBufferMemory
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -22,7 +22,8 @@ from langchain.agents import AgentType, initialize_agent
 from langchain.agents.format_scratchpad import format_to_openai_function_messages
 from langchain.prompts import MessagesPlaceholder
 from langchain.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
-from langchain.memory import ConversationBufferMemory
+from langchain_core.memory import BaseMemory
+from langchain_community.chat_message_histories import ChatMessageHistory
 
 # Constants
 MAX_CONVERSATION_TOKENS = 32000
@@ -81,8 +82,6 @@ class AgentManager:
         
     def create_memory(self):
         """Create a conversation memory using the new API."""
-        from langchain.memory import ChatMessageHistory
-        
         return ConversationBufferMemory(
             memory_key="chat_history",
             return_messages=True,
@@ -242,7 +241,7 @@ Thought: {agent_scratchpad}"""
             logging.info("=== DETAILED MEMORY STATISTICS ===")
             logging.info(f"Memory Allocation (32K total):")
             logging.info(f"├── Current buffer: {messages_tokens:,} tokens ({(messages_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
-            logging.info(f"���── Summary buffer: {summary_tokens:,} tokens ({(summary_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
+            logging.info(f"├── Summary buffer: {summary_tokens:,} tokens ({(summary_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
             logging.info(f"└── Total usage: {total_tokens:,} tokens ({(total_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
             
             logging.info("\nMessage Buffer Analysis:")
