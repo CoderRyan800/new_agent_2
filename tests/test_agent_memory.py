@@ -190,25 +190,33 @@ class TestAgentMemory(unittest.TestCase):
 
     def test_vector_database_operations(self):
         """Test basic vector database operations."""
-        with patch('basic_agent.persist_directory', self.test_db_path):
-            test_input = "This is a unique test message"
-            self.agent_manager.agent.run.return_value = "Test response"
-            
-            # Clear any existing interactions
-            if os.path.exists(self.test_db_path):
-                shutil.rmtree(self.test_db_path)
+        # Create a unique test directory for this test
+        test_specific_db = os.path.join(self.test_db_path + "_vector_test")
+        
+        # Ensure we start with a fresh database
+        if os.path.exists(test_specific_db):
+            if os.path.exists(os.path.join(test_specific_db, "chroma.sqlite3")):
+                os.chmod(os.path.join(test_specific_db, "chroma.sqlite3"), 0o666)
+            shutil.rmtree(test_specific_db)
+        
+        try:
+            # Create a new agent manager with a fresh database
+            test_agent = AgentManager(clear_db=True, persist_dir=test_specific_db)
+            test_agent.agent = MagicMock()
+            test_agent.agent.run.return_value = "Test response"
             
             # Perform interaction
-            response = self.agent_manager.interact(test_input)
+            test_input = "This is a unique test message"
+            test_agent.interact(test_input)
             time.sleep(1)  # Allow for database write
             
             # Test retrieval
-            results = self.agent_manager.vectordb.similarity_search(test_input, k=1)
+            results = test_agent.vectordb.similarity_search(test_input, k=1)
             self.assertTrue(len(results) > 0, "No results found in vector database")
             
             # Print debug information
             print("\nExpected input:", test_input)
-            print("Response:", response)
+            print("Response:", test_agent.agent.run.return_value)
             print("\nDatabase contents:")
             for doc in results:
                 print(f"Document: {doc.page_content}")
@@ -216,7 +224,14 @@ class TestAgentMemory(unittest.TestCase):
             # Check if the test input appears in any document
             found = any(test_input in doc.page_content for doc in results)
             self.assertTrue(found, 
-                           f"Test input '{test_input}' not found in documents")
+                           f"Test input '{test_input}' not found in documents. Found instead: {[doc.page_content for doc in results]}")
+        
+        finally:
+            # Clean up the test-specific database
+            if os.path.exists(test_specific_db):
+                if os.path.exists(os.path.join(test_specific_db, "chroma.sqlite3")):
+                    os.chmod(os.path.join(test_specific_db, "chroma.sqlite3"), 0o666)
+                shutil.rmtree(test_specific_db)
 
     def test_memory_token_counting(self):
         """Test token counting functionality."""
