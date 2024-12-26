@@ -203,18 +203,19 @@ Thought: {agent_scratchpad}"""
             if os.path.exists(db_path):
                 os.chmod(db_path, 0o666)
             
-            # Retry logic for database operations
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    self.vectordb.add_texts(texts, metadatas=metadatas)
-                    if self.verify_database_entry(new_interaction):
-                        break
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(0.5)
-                
+            # Check for existing entries with the same hash
+            existing_entries = self.vectordb.similarity_search(new_interaction, k=1)
+            if existing_entries and interaction_hash == self.get_text_hash(existing_entries[0].page_content):
+                logging.info(f"Duplicate entry detected with hash {interaction_hash}")
+                return
+            
+            # Add new entry
+            self.vectordb.add_texts(texts, metadatas=metadatas)
+            
+            # Verify the entry was added
+            if not self.verify_database_entry(new_interaction):
+                logging.error("Failed to verify database entry")
+            
         except Exception as e:
             logging.error(f"Error storing interaction: {str(e)}", exc_info=True)
 
