@@ -19,6 +19,9 @@ import logging
 from datetime import datetime
 import time
 from langchain.agents import AgentType, initialize_agent
+from langchain.agents.format_scratchpad import format_to_openai_function_messages
+from langchain.prompts import MessagesPlaceholder
+from langchain.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
 
 # Constants
 MAX_CONVERSATION_TOKENS = 32000
@@ -93,10 +96,41 @@ class AgentManager:
             )
         ]
         
-        return initialize_agent(
-            tools=tools,
+        # Create a custom prompt template with all required variables
+        system_message = """You are a helpful AI assistant. You have access to the following tools:
+
+{tools}
+
+Use the following format:
+
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {input}
+Thought: {agent_scratchpad}"""
+
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template(system_message),
+            MessagesPlaceholder(variable_name="chat_history"),
+            HumanMessagePromptTemplate.from_template("{input}")
+        ])
+        
+        agent = create_react_agent(
             llm=llm,
-            agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+            tools=tools,
+            prompt=prompt
+        )
+        
+        return AgentExecutor(
+            agent=agent,
+            tools=tools,
             memory=self.memory,
             verbose=True,
             handle_parsing_errors=True
@@ -127,8 +161,8 @@ class AgentManager:
                     "\n\n" + full_context
                 )
 
-            # Get response from agent
-            response = self.agent.run(full_context)
+            # Get response from agent using the new API
+            response = self.agent.invoke({"input": full_context})["output"]
             
             # Create the complete interaction record with timestamp
             new_interaction = (
