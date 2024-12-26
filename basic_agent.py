@@ -1,6 +1,6 @@
 from langchain.agents import create_react_agent, AgentExecutor
 from langchain_openai import ChatOpenAI
-from langchain.memory import ConversationSummaryBufferMemory
+from langchain.memory import ConversationBufferMemory
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -22,7 +22,8 @@ from langchain.agents import AgentType, initialize_agent
 from langchain.agents.format_scratchpad import format_to_openai_function_messages
 from langchain.prompts import MessagesPlaceholder
 from langchain.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
-from langchain.memory import ConversationBufferMemory
+from langchain_core.memory import BaseMemory
+from langchain_community.chat_message_histories import ChatMessageHistory
 
 # Constants
 MAX_CONVERSATION_TOKENS = 32000
@@ -80,9 +81,12 @@ class AgentManager:
         self.agent = self.create_agent()
         
     def create_memory(self):
+        """Create a conversation memory using the new API."""
         return ConversationBufferMemory(
             memory_key="chat_history",
-            return_messages=True
+            return_messages=True,
+            chat_memory=ChatMessageHistory(),
+            output_key="output"
         )
     
     def create_agent(self):
