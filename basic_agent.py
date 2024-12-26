@@ -22,6 +22,7 @@ from langchain.agents import AgentType, initialize_agent
 from langchain.agents.format_scratchpad import format_to_openai_function_messages
 from langchain.prompts import MessagesPlaceholder
 from langchain.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
+from langchain.memory import ConversationBufferMemory
 
 # Constants
 MAX_CONVERSATION_TOKENS = 32000
@@ -79,9 +80,7 @@ class AgentManager:
         self.agent = self.create_agent()
         
     def create_memory(self):
-        return ConversationSummaryBufferMemory(
-            llm=ChatOpenAI(model_name=self.model_name, temperature=0),
-            max_token_limit=self.max_tokens,
+        return ConversationBufferMemory(
             memory_key="chat_history",
             return_messages=True
         )
@@ -161,8 +160,8 @@ Thought: {agent_scratchpad}"""
                     "\n\n" + full_context
                 )
 
-            # Get response from agent using the new API
-            response = self.agent.invoke({"input": full_context})["output"]
+            # Get response using run method
+            response = self.agent.run(full_context)
             
             # Create the complete interaction record with timestamp
             new_interaction = (
@@ -196,11 +195,25 @@ Thought: {agent_scratchpad}"""
                 "timestamp_readable": timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')
             } for _ in texts]
             
-            self.vectordb.add_texts(texts, metadatas=metadatas)
+            # Ensure database directory and file are writable
+            if not os.path.exists(self.persist_directory):
+                os.makedirs(self.persist_directory, mode=0o777)
             
-            if not self.verify_database_entry(new_interaction):
-                logging.error("Failed to verify database entry - attempting retry")
-                self.vectordb.add_texts(texts, metadatas=metadatas)
+            db_path = os.path.join(self.persist_directory, "chroma.sqlite3")
+            if os.path.exists(db_path):
+                os.chmod(db_path, 0o666)
+            
+            # Retry logic for database operations
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    self.vectordb.add_texts(texts, metadatas=metadatas)
+                    if self.verify_database_entry(new_interaction):
+                        break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    time.sleep(0.5)
                 
         except Exception as e:
             logging.error(f"Error storing interaction: {str(e)}", exc_info=True)
