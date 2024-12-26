@@ -145,5 +145,42 @@ class TestAgentMemory(unittest.TestCase):
                 except (IndexError, ValueError) as e:
                     self.fail(f"Invalid timestamp format in line '{timestamp_line}': {str(e)}")
 
+    def test_vector_database_operations(self):
+        """Test basic vector database operations."""
+        with patch('basic_agent.persist_directory', self.test_db_path):
+            # Test adding and retrieving
+            test_input = "This is a unique test message"
+            self.agent_manager.interact(test_input)
+            
+            # Test retrieval
+            results = self.agent_manager.vectordb.similarity_search(test_input, k=1)
+            self.assertTrue(len(results) > 0)
+            self.assertIn(test_input, results[0].page_content)
+            
+            # Test metadata
+            metadata = results[0].metadata
+            self.assertIn('timestamp', metadata)
+            self.assertIn('hash', metadata)
+
+    def test_memory_token_counting(self):
+        """Test token counting functionality."""
+        test_text = "This is a test message"
+        token_count = self.agent_manager.count_tokens(test_text)
+        self.assertIsInstance(token_count, int)
+        self.assertTrue(token_count > 0)
+
+    @patch('langchain_openai.ChatOpenAI')
+    def test_conversation_context(self, mock_llm):
+        """Test that conversation context is properly maintained."""
+        mock_llm.return_value.predict.return_value = "Response"
+        
+        # First interaction
+        self.agent_manager.interact("First message")
+        
+        # Check that context is included in second interaction
+        with patch.object(self.agent_manager, 'vectordb') as mock_db:
+            self.agent_manager.interact("Second message")
+            mock_db.similarity_search.assert_called()
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
