@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch, MagicMock
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import after path modification
-from basic_agent import (
+from src.agents.basic_agent import (
     initialize_database,
     interact_with_agent,
     safe_persist_database,
