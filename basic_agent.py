@@ -56,6 +56,47 @@ def safe_calculator(expression):
     except Exception as e:
         return f"Error calculating: {str(e)}"
 
+def edit_context(command):
+    """
+    Edit the context file that defines your persona, your knowledge about the human, and your working notes. Command should be in format: 'header|content'
+    Only handles three standard headers: persona, human, and context_notes
+    """
+    try:
+        header, content = command.split('|', 1)
+        header = header.strip().lower()
+        
+        # Validate header
+        if header not in ['persona', 'human', 'context_notes']:
+            return "Error: Header must be one of: persona, human, context_notes"
+            
+        # Read current context
+        try:
+            with open(CONTEXT_FILE, 'r') as f:
+                context_data = json.loads(f.read())
+        except FileNotFoundError:
+            context_data = {}
+        except json.JSONDecodeError:
+            return "Error: Context file contains invalid JSON"
+            
+        # Ensure all standard keys exist
+        for key in ['persona', 'human', 'context_notes']:
+            if key not in context_data:
+                context_data[key] = ""
+                
+        # Update the specified section
+        context_data[header] = content
+            
+        # Write back to file
+        with open(CONTEXT_FILE, 'w') as f:
+            json.dump(context_data, f, indent=4)
+            
+        return f"Success: Updated {header}"
+        
+    except ValueError:
+        return "Error: Invalid format. Use 'header|content'"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 class Agent:
     def __init__(self):
         # Initialize core components
@@ -81,12 +122,24 @@ class Agent:
                 func=safe_calculator,
                 description="Useful for performing mathematical calculations. Input should be a mathematical expression using numbers and basic operators (+, -, *, /)."
             ),
-            # Add more tools here as needed
+            Tool(
+                name="EditContext",
+                func=edit_context,
+                description="Edit the context file. Use format 'header|content' where header must be one of: persona, human, context_notes. Example: 'persona|I am a helpful AI assistant'. Use this to update your persona, your knowledge about the human, or your working notes."
+            )
         ]
 
         # Create the prompt with required variables for ReAct
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a helpful AI assistant with perfect memory recall and access to tools. You have access to the following tools:
+            ("system", """You are a helpful AI assistant with perfect memory recall and access to tools. At the start of each interaction, you will see three important context sections:
+
+1. "persona": This defines who you are and how you should behave. You should always act according to this persona. You can edit this using the EditContext tool if you need to update your personality or role.
+
+2. "human": This describes the human you're working with. Use this to better understand and assist your user. You can update this section using EditContext as you learn more about them.
+
+3. "context_notes": This is your notepad for important facts or observations. You can edit these notes using the EditContext tool, but keep them focused and brief. Use this as your working memory for important information.
+
+You have access to the following tools:
 
 {tools}
 
