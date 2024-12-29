@@ -24,11 +24,13 @@ from langchain_core.prompts import ChatPromptTemplate
 from operator import itemgetter
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
+import json
 
 # Constants
 MAX_CONVERSATION_TOKENS = 8000
 MODEL_SELECTION = "gpt-4o"
 PERSIST_DIRECTORY = "chroma_db"
+CONTEXT_FILE = "context.json"
 
 # Define log filename with timestamp (using UTC)
 LOG_FILENAME = f"agent_conversation_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_UTC.log"
@@ -220,6 +222,36 @@ class Agent:
             except Exception as e:
                 logging.error(f"Main loop error: {str(e)}", exc_info=True)
                 print("\nAn error occurred. Please try again.")
+
+    def read_context_file(self):
+        """
+        Reads the context file and formats it into a string with headers and values.
+        Returns formatted string or empty string if file doesn't exist/has error.
+        """
+        try:
+            with open(CONTEXT_FILE, 'r') as file:
+                context_data = json.loads(file.read())
+            
+            formatted_text = []
+            for header, content in context_data.items():
+                formatted_text.extend([
+                    header,
+                    "",  # blank line after header
+                    content,
+                    "",   # blank line after content
+                ])
+            
+            # Join with newlines but don't strip
+            return "\n".join(formatted_text)
+        except FileNotFoundError:
+            logging.warning(f"Context file {CONTEXT_FILE} not found")
+            return ""
+        except json.JSONDecodeError:
+            logging.error(f"Invalid JSON in {CONTEXT_FILE}")
+            return ""
+        except Exception as e:
+            logging.error(f"Error reading context file: {str(e)}")
+            return ""
 
 # Update the main block
 if __name__ == "__main__":
