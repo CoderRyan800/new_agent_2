@@ -55,7 +55,7 @@ BASE_PATH, PATHS = validate_project_structure()
 
 # Constants
 MAX_CONVERSATION_TOKENS = 8000
-MODEL_SELECTION = "gpt-4"
+MODEL_SELECTION = "gpt-4o"
 PERSIST_DIRECTORY = str(PATHS['automatic'])
 SECOND_VECTOR_DB = str(PATHS['manual'])
 CONTEXT_FILE = str(PATHS['context_files'] / 'context_memory.json')
@@ -143,21 +143,22 @@ class Agent:
 2. "human": This describes the human you're working with. Use this to better understand and assist your user.
 3. "context_notes": This is your notepad for important facts or observations.
 
-IMPORTANT: You must ALWAYS use this EXACT format:
+IMPORTANT: You MUST follow this EXACT format for EVERY response:
 
 For simple responses:
-Thought: [your reasoning]
-Final Answer: [your response]
+Thought: [write your reasoning in detail, considering context and memory]
+Final Answer: [write your complete response]
 
 For using tools:
-Thought: [your reasoning]
-Action: [tool name]
+Thought: [write your reasoning in detail]
+Action: [exact tool name]
 Action Input: [tool input]
 Observation: [tool output]
 Thought: [your next reasoning]
-Final Answer: [your final response]
+Final Answer: [your complete response]
 
-Never skip the format or combine steps. Always include Thought before Final Answer.
+Never skip steps or combine steps. Always start with 'Thought:' and end with 'Final Answer:'.
+Always provide detailed responses that fully address the user's query.
 
 Available tools: {tool_names}"""),
             MessagesPlaceholder(variable_name="history"),
@@ -168,12 +169,12 @@ Available tools: {tool_names}"""),
         # Create a partial with BOTH required variables
         partial_prompt = prompt.partial(
             tool_names=", ".join(tool_names),
-            tools=self.tools  # Add tools variable that ReAct needs
+            tools=self.tools
         )
 
         return create_react_agent(
             llm=ChatOpenAI(
-                model_name=MODEL_SELECTION, 
+                model_name=MODEL_SELECTION,  # Using gpt-4o as specified
                 temperature=0,
                 request_timeout=60
             ),
@@ -189,9 +190,8 @@ Available tools: {tool_names}"""),
             memory=self.memory,
             verbose=True,
             handle_parsing_errors=True,
-            max_iterations=5,  # Increased from 3
-            max_execution_time=60,  # Added timeout
-            early_stopping_method="generate"  # Added to help with long responses
+            max_iterations=5,
+            max_execution_time=60,  # 60 second timeout
         )
 
     def count_tokens(self, text):
@@ -272,27 +272,42 @@ Available tools: {tool_names}"""),
         return ChatMessageHistory()
 
     def interact_with_agent(self, user_input):
-        """Core interaction function with basic token monitoring."""
+        """Core interaction function with enhanced memory retrieval."""
         try:
             self.log_memory_stats()
             
             current_timestamp = datetime.utcnow()
             timestamp_str = current_timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')
             
-            # Get context and history
+            # Enhanced context retrieval
             context_file_content = self.read_context_file()
-            relevant_history = self.vectordb.similarity_search(user_input, k=3) if self.vectordb._collection.count() > 0 else []
             
-            # Build context
+            # Get relevant history with scores
+            if self.vectordb._collection.count() > 0:
+                results_with_scores = self.vectordb.similarity_search_with_score(
+                    user_input, 
+                    k=5  # Get top 5 matches
+                )
+                # Filter by score threshold (0.7 similarity = 0.3 distance in cosine space)
+                relevant_history = [
+                    doc for doc, score in results_with_scores 
+                    if score < 0.3  # Lower score = better match in cosine distance
+                ]
+            else:
+                relevant_history = []
+            
+            # Build richer context
             context = context_file_content
             if relevant_history:
-                context += "\n\nPast context:\n" + "\n".join(doc.page_content for doc in relevant_history)
-            context += f"\n\n[{timestamp_str}]\nUser: {user_input}"
+                context += "\n\nRelevant past interactions:\n" + "\n---\n".join(
+                    f"Previous {i+1}: {doc.page_content}" 
+                    for i, doc in enumerate(relevant_history)
+                )
+            context += f"\n\nCurrent interaction [{timestamp_str}]:\nUser: {user_input}"
             
-            logging.info(f"Context: {context}")
+            logging.info(f"Context length: {len(context)} chars")
             
             try:
-                # Get response from agent with timeout
                 response = self.agent_executor.invoke(
                     {"input": context},
                     config={"timeout": 60}
@@ -300,15 +315,16 @@ Available tools: {tool_names}"""),
                 response_text = response.get('output', str(response))
             except Exception as e:
                 logging.error(f"Agent execution error: {str(e)}")
-                return "I apologize, but I encountered an error in processing. Could you rephrase your request?"
+                return "I apologize, but I encountered an error. Could you rephrase your request?"
             
-            # Store interaction
+            # Store interaction with metadata
             new_interaction = f"[{timestamp_str}]\nUser: {user_input}\nAgent: {response_text}"
             self.vectordb.add_texts(
                 texts=[new_interaction],
                 metadatas=[{
                     "timestamp": current_timestamp.isoformat(),
-                    "timestamp_readable": timestamp_str
+                    "timestamp_readable": timestamp_str,
+                    "type": "interaction"
                 }]
             )
             
