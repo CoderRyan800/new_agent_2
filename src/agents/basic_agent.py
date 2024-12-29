@@ -133,53 +133,52 @@ class Agent:
 
     def _create_agent(self):
         """Create the agent with the ReAct prompt."""
+        # Get tool names first
+        tool_names = [tool.name for tool in self.tools]
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a helpful AI assistant with perfect memory recall and access to tools. At the start of each interaction, you will see three important context sections:
 
 1. "persona": This defines who you are and how you should behave. You should always act according to this persona.
 2. "human": This describes the human you're working with. Use this to better understand and assist your user.
-3. "context_notes": This is your notepad for important facts or observations. Keep these notes focused and brief. When they grow too long or contain detailed information you might need later, move appropriate content to your manual memory storage using the WriteToMemory tool.
+3. "context_notes": This is your notepad for important facts or observations.
 
-You have two memory systems:
-1. Context Notes: Your quick-access notepad for current, brief information
-2. Manual Memory: Your permanent notebook for detailed information, important facts, and anything you might need to recall later
+IMPORTANT: You must ALWAYS use this EXACT format:
 
-Memory Management Strategy:
-- Keep context_notes brief and current
-- When context_notes grow long, consider what to move to manual memory
-- Use WriteToMemory to store important information with good keywords and context
-- Use SearchMemory to recall stored information when needed
-- Always include clear titles and detailed context when storing memories to make future retrieval easier
+For simple responses:
+Thought: [your reasoning]
+Final Answer: [your response]
 
-You have access to the following tools:
+For using tools:
+Thought: [your reasoning]
+Action: [tool name]
+Action Input: [tool input]
+Observation: [tool output]
+Thought: [your next reasoning]
+Final Answer: [your final response]
 
-{tools}
+Never skip the format or combine steps. Always include Thought before Final Answer.
 
-The available tools are: {tool_names}
-
-You must ALWAYS respond using the following format, even for simple greetings or responses that don't require tools:
-
-Thought: First, I should think about what to do
-Thought: I now know how to respond
-Final Answer: [Your actual response here]
-
-If you need to use a tool, use this format instead:
-Thought: First, I should...
-Action: tool_name
-Action Input: input for the tool
-Observation: tool output
-... (repeat Thought/Action/Observation if needed)
-Thought: I now know the answer
-Final Answer: [Your response here]"""),
+Available tools: {tool_names}"""),
             MessagesPlaceholder(variable_name="history"),
             ("human", "{input}"),
             ("assistant", "{agent_scratchpad}")
         ])
 
+        # Create a partial with BOTH required variables
+        partial_prompt = prompt.partial(
+            tool_names=", ".join(tool_names),
+            tools=self.tools  # Add tools variable that ReAct needs
+        )
+
         return create_react_agent(
-            llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
+            llm=ChatOpenAI(
+                model_name=MODEL_SELECTION, 
+                temperature=0,
+                request_timeout=60
+            ),
             tools=self.tools,
-            prompt=prompt
+            prompt=partial_prompt
         )
 
     def _create_agent_executor(self):
@@ -190,7 +189,9 @@ Final Answer: [Your response here]"""),
             memory=self.memory,
             verbose=True,
             handle_parsing_errors=True,
-            max_iterations=3
+            max_iterations=5,  # Increased from 3
+            max_execution_time=60,  # Added timeout
+            early_stopping_method="generate"  # Added to help with long responses
         )
 
     def count_tokens(self, text):
@@ -290,9 +291,16 @@ Final Answer: [Your response here]"""),
             
             logging.info(f"Context: {context}")
             
-            # Get response from agent
-            response = self.agent_executor.invoke({"input": context})
-            response_text = response.get('output', str(response))
+            try:
+                # Get response from agent with timeout
+                response = self.agent_executor.invoke(
+                    {"input": context},
+                    config={"timeout": 60}
+                )
+                response_text = response.get('output', str(response))
+            except Exception as e:
+                logging.error(f"Agent execution error: {str(e)}")
+                return "I apologize, but I encountered an error in processing. Could you rephrase your request?"
             
             # Store interaction
             new_interaction = f"[{timestamp_str}]\nUser: {user_input}\nAgent: {response_text}"
@@ -309,7 +317,7 @@ Final Answer: [Your response here]"""),
             
         except Exception as e:
             logging.error(f"Interaction error: {str(e)}", exc_info=True)
-            return "I encountered an error processing your request."
+            return "I encountered an error processing your request. Please try again."
 
     def run(self):
         """Interactive loop to run the agent."""
