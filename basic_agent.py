@@ -22,7 +22,7 @@ import time
 
 # Constants
 MAX_CONVERSATION_TOKENS = 8000
-MODEL_SELECTION = "gpt-4o"
+MODEL_SELECTION = "gpt-4"
 
 # Define log filename with timestamp (using UTC)
 LOG_FILENAME = f"agent_conversation_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_UTC.log"
@@ -43,11 +43,8 @@ if not api_key:
     raise ValueError("OpenAI API key not found in environment variables")
 os.environ["OPENAI_API_KEY"] = api_key
 
-try:
-    tokenizer = tiktoken.encoding_for_model(MODEL_SELECTION)
-except Exception as e:
-    logging.error(f"Failed to initialize tokenizer: {str(e)}", exc_info=True)
-    raise RuntimeError("Critical: Failed to initialize tokenizer")
+# Initialize tokenizer
+tokenizer = tiktoken.encoding_for_model(MODEL_SELECTION)
 
 # Define the path for the Chroma database
 persist_directory = os.path.join(os.getcwd(), "chroma_db")
@@ -57,12 +54,8 @@ def get_text_hash(text):
     return hashlib.md5(text.encode()).hexdigest()
 
 def count_tokens(text):
-    """Count the number of tokens in a string with error handling."""
-    try:
-        return len(tokenizer.encode(str(text)))
-    except Exception as e:
-        logging.error(f"Error counting tokens: {str(e)}", exc_info=True)
-        return 0
+    """Simple token counter."""
+    return len(tokenizer.encode(str(text)))
 
 def safe_persist_database():
     """Check database state with error handling."""
@@ -111,37 +104,16 @@ def verify_database_entry(new_interaction, max_retries=3):
     return False
 
 def log_memory_stats():
-    """Log detailed memory statistics with error handling."""
+    """Simplified memory statistics logging."""
     try:
         memory_dict = memory.load_memory_variables({})
         current_messages = memory_dict.get("history", [])
-        moving_summary = getattr(memory, 'moving_summary_buffer', "No summary yet")
         
-        messages_tokens = count_tokens(str(current_messages))
-        summary_tokens = count_tokens(str(moving_summary))
-        total_tokens = messages_tokens + summary_tokens
-        
-        # Memory summarization threshold for testing
-        if total_tokens > 4000:  # About 12.5% of 32K
-            logging.warning("MEMORY SUMMARIZATION TRIGGERED - Token usage exceeds threshold")
-        
-        logging.info("=== DETAILED MEMORY STATISTICS ===")
-        logging.info(f"Memory Allocation (32K total):")
-        logging.info(f"├── Current buffer: {messages_tokens:,} tokens ({(messages_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
-        logging.info(f"├── Summary buffer: {summary_tokens:,} tokens ({(summary_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
-        logging.info(f"└── Total usage: {total_tokens:,} tokens ({(total_tokens/MAX_CONVERSATION_TOKENS*100):.1f}%)")
-        
-        logging.info("\nMessage Buffer Analysis:")
-        if isinstance(current_messages, list):
-            for idx, msg in enumerate(current_messages, 1):
-                msg_tokens = count_tokens(str(msg))
-                logging.info(f"Message {idx}: {msg_tokens:,} tokens")
-        
-        logging.info(f"\nMoving Summary ({summary_tokens} tokens):")
-        logging.info(f"{moving_summary}\n")
+        total_tokens = count_tokens(str(current_messages))
+        logging.info(f"Memory usage: {total_tokens:,} tokens ({(total_tokens/MAX_CONVERSATION_TOKENS*100):.1f}% of limit)")
         
     except Exception as e:
-        logging.error(f"Error logging memory stats: {str(e)}", exc_info=True)
+        logging.error(f"Error logging memory stats: {str(e)}")
 
 def cleanup():
     """Cleanup function for graceful shutdown."""
@@ -157,33 +129,25 @@ def signal_handler(sig, frame):
     cleanup()
     sys.exit(0)
 
-# Initialize memory
-try:
-    memory = ConversationSummaryBufferMemory(
-        llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
-        max_token_limit=MAX_CONVERSATION_TOKENS,
-        return_messages=True,
-        memory_key="history"
-    )
-    memory.load_memory_variables({})  # Test load
-    logging.info("Successfully initialized ConversationSummaryBufferMemory")
-except Exception as e:
-    logging.error(f"Failed to initialize memory: {str(e)}", exc_info=True)
-    raise RuntimeError("Critical: Failed to initialize memory system")
+# Initialize memory with token limit
+memory = ConversationSummaryBufferMemory(
+    llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
+    max_token_limit=MAX_CONVERSATION_TOKENS,
+    return_messages=True,
+    memory_key="history"
+)
 
 # Initialize database
 vectordb = initialize_database(clear=False)
 
 def interact_with_agent(user_input):
-    """Interact with the agent with proper cleanup and temporal awareness."""
+    """Core interaction function with basic token monitoring."""
     try:
-        # Log pre-interaction stats
-        logging.info("\n=== PRE-INTERACTION STATE ===")
+        # Log pre-interaction memory state
         log_memory_stats()
         
-        # Get current timestamp at the moment of interaction
         current_timestamp = datetime.utcnow()
-        timestamped_input = f"[{current_timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')}]\nUser: {user_input}"
+        timestamp_str = current_timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')
         
         # Retrieve relevant past conversations
         db_size = vectordb._collection.count()
@@ -191,7 +155,7 @@ def interact_with_agent(user_input):
         relevant_history = vectordb.similarity_search(user_input, k=k) if db_size > 0 else []
         
         # Combine current conversation with relevant history
-        full_context = f"Current interaction:\n{timestamped_input}"
+        full_context = f"Current interaction:\n{timestamp_str}\nUser: {user_input}"
         if relevant_history:
             full_context = (
                 "Relevant past information:\n" +
@@ -252,15 +216,14 @@ def interact_with_agent(user_input):
         # Update conversation memory
         memory.save_context({"input": user_input}, {"output": response})
         
-        # Log post-interaction stats
-        logging.info("\n=== POST-INTERACTION STATE ===")
+        # Log post-interaction memory state
         log_memory_stats()
 
         return response
         
     except Exception as e:
-        logging.error(f"Error in interaction: {str(e)}", exc_info=True)
-        return "I'm sorry, but I encountered an error while processing your request."
+        logging.error(f"Interaction error: {str(e)}")
+        return "I encountered an error processing your request."
 
 # Set up signal handlers
 signal.signal(signal.SIGINT, signal_handler)
