@@ -222,6 +222,8 @@ Final Answer: [Your response here]"""),
             if relevant_history:
                 context += "\n\nPast context:\n" + "\n".join(doc.page_content for doc in relevant_history)
             context += f"\n\n[{timestamp_str}]\nUser: {user_input}"
+
+            logging.info(f"Context: {context}")
             
             # Use agent_executor
             response = self.agent_executor.invoke({"input": context})
