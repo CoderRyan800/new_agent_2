@@ -95,9 +95,6 @@ The available tools are: {tool_names}
 You must ALWAYS respond using the following format, even for simple greetings or responses that don't require tools:
 
 Thought: First, I should think about what to do
-Action: None
-Action Input: None
-Observation: No tool used
 Thought: I now know how to respond
 Final Answer: [Your actual response here]
 
