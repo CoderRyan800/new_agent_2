@@ -28,9 +28,9 @@ import json
 
 # Constants
 MAX_CONVERSATION_TOKENS = 8000
-MODEL_SELECTION = "gpt-4o"
+MODEL_SELECTION = "gpt-4"
 PERSIST_DIRECTORY = "chroma_db"
-CONTEXT_FILE = "context.json"
+CONTEXT_FILE = "context_memory.json"
 
 # Define log filename with timestamp (using UTC)
 LOG_FILENAME = f"agent_conversation_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_UTC.log"
@@ -44,6 +44,17 @@ class CustomFormatter(logging.Formatter):
 handler = logging.FileHandler(LOG_FILENAME)
 handler.setFormatter(CustomFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+def safe_calculator(expression):
+    try:
+        # Only allow basic math operations
+        allowed_chars = set("0123456789+-*/(). ")
+        if not all(c in allowed_chars for c in expression):
+            return "Error: Invalid characters in expression"
+        result = eval(expression)
+        return str(result)
+    except Exception as e:
+        return f"Error calculating: {str(e)}"
 
 class Agent:
     def __init__(self):
@@ -63,18 +74,59 @@ class Agent:
             memory_key="history"
         )
 
-        # Initialize conversation chain
+        # Add tools setup before conversation chain initialization
+        self.tools = [
+            Tool(
+                name="Calculator",
+                func=safe_calculator,
+                description="Useful for performing mathematical calculations. Input should be a mathematical expression using numbers and basic operators (+, -, *, /)."
+            ),
+            # Add more tools here as needed
+        ]
+
+        # Create the prompt with required variables for ReAct
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful AI assistant with perfect memory recall."),
+            ("system", """You are a helpful AI assistant with perfect memory recall and access to tools. You have access to the following tools:
+
+{tools}
+
+The available tools are: {tool_names}
+
+You must ALWAYS respond using the following format, even for simple greetings or responses that don't require tools:
+
+Thought: First, I should think about what to do
+Action: None
+Action Input: None
+Observation: No tool used
+Thought: I now know how to respond
+Final Answer: [Your actual response here]
+
+If you need to use a tool, use this format instead:
+Thought: First, I should...
+Action: tool_name
+Action Input: input for the tool
+Observation: tool output
+... (repeat Thought/Action/Observation if needed)
+Thought: I now know the answer
+Final Answer: [Your response here]"""),
             MessagesPlaceholder(variable_name="history"),
-            ("human", "{input}")
+            ("human", "{input}"),
+            ("assistant", "{agent_scratchpad}")
         ])
-        chain = prompt | ChatOpenAI(model_name=MODEL_SELECTION, temperature=0)
-        self.conversation = RunnableWithMessageHistory(
-            chain,
-            self.get_session_history,
-            input_messages_key="input",
-            history_messages_key="history"
+
+        self.agent = create_react_agent(
+            llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
+            tools=self.tools,
+            prompt=prompt
+        )
+
+        self.agent_executor = AgentExecutor(
+            agent=self.agent,
+            tools=self.tools,
+            memory=self.memory,
+            verbose=True,
+            handle_parsing_errors=True,
+            max_iterations=3
         )
 
     # Move all standalone functions into class methods
@@ -166,20 +218,17 @@ class Agent:
             current_timestamp = datetime.utcnow()
             timestamp_str = current_timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')
             
-            # Get relevant history
+            context_file_content = self.read_context_file()
             relevant_history = self.vectordb.similarity_search(user_input, k=3) if self.vectordb._collection.count() > 0 else []
             
-            # Prepare context
-            context = f"[{timestamp_str}]\nUser: {user_input}"
+            context = context_file_content
             if relevant_history:
-                context = "Past context:\n" + "\n".join(doc.page_content for doc in relevant_history) + "\n\n" + context
+                context += "\n\nPast context:\n" + "\n".join(doc.page_content for doc in relevant_history)
+            context += f"\n\n[{timestamp_str}]\nUser: {user_input}"
             
-            # Get response using the new pattern
-            response = self.conversation.invoke(
-                {"input": context},
-                config={"configurable": {"session_id": "default"}}
-            )
-            response_text = response.content if hasattr(response, 'content') else str(response)
+            # Use agent_executor
+            response = self.agent_executor.invoke({"input": context})
+            response_text = response.get('output', str(response))
             
             # Store interaction
             new_interaction = f"[{timestamp_str}]\nUser: {user_input}\nAgent: {response_text}"
