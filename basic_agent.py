@@ -30,6 +30,7 @@ import json
 MAX_CONVERSATION_TOKENS = 8000
 MODEL_SELECTION = "gpt-4"
 PERSIST_DIRECTORY = "chroma_db"
+SECOND_VECTOR_DB = "chroma_db_manual"  # New constant for manual long-term memory
 CONTEXT_FILE = "context_memory.json"
 
 # Define log filename with timestamp (using UTC)
@@ -97,6 +98,103 @@ def edit_context(command):
     except Exception as e:
         return f"Error: {str(e)}"
 
+def initialize_manual_memory():
+    """
+    Check if manual memory database exists and initialize it if not.
+    This should be run at startup to ensure the manual memory system is ready.
+    Returns success/failure message.
+    """
+    try:
+        if os.path.exists(SECOND_VECTOR_DB):
+            embeddings = OpenAIEmbeddings()
+            vectordb = Chroma(
+                persist_directory=SECOND_VECTOR_DB,
+                embedding_function=embeddings,
+                collection_metadata={"hnsw:space": "cosine"}
+            )
+            count = vectordb._collection.count()
+            return f"Manual memory system already exists with {count} entries"
+        else:
+            embeddings = OpenAIEmbeddings()
+            vectordb = Chroma(
+                persist_directory=SECOND_VECTOR_DB,
+                embedding_function=embeddings,
+                collection_metadata={"hnsw:space": "cosine"}
+            )
+            return "Manual memory system initialized successfully"
+    except Exception as e:
+        return f"Error initializing manual memory: {str(e)}"
+
+def write_to_manual_memory(entry):
+    """
+    Store information in manual memory database.
+    Entry should be in format: 'title|content' where title describes the memory
+    and content is the actual information to store.
+    Returns success/failure message.
+    """
+    try:
+        title, content = entry.split('|', 1)
+        title = title.strip()
+        content = content.strip()
+        
+        embeddings = OpenAIEmbeddings()
+        vectordb = Chroma(
+            persist_directory=SECOND_VECTOR_DB,
+            embedding_function=embeddings,
+            collection_metadata={"hnsw:space": "cosine"}
+        )
+        
+        timestamp = datetime.utcnow()
+        
+        vectordb.add_texts(
+            texts=[content],
+            metadatas=[{
+                "title": title,
+                "timestamp": timestamp.isoformat(),
+                "timestamp_readable": timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')
+            }]
+        )
+        
+        return f"Successfully stored memory: {title}"
+    except ValueError:
+        return "Error: Entry must be in format 'title|content'"
+    except Exception as e:
+        return f"Error storing memory: {str(e)}"
+
+def search_manual_memory(query):
+    """
+    Search through manual memory database using similarity search.
+    Query can be any text; will return most relevant stored memories.
+    Returns formatted string of search results or error message.
+    """
+    try:
+        embeddings = OpenAIEmbeddings()
+        vectordb = Chroma(
+            persist_directory=SECOND_VECTOR_DB,
+            embedding_function=embeddings,
+            collection_metadata={"hnsw:space": "cosine"}
+        )
+        
+        if vectordb._collection.count() == 0:
+            return "Manual memory is empty"
+            
+        results = vectordb.similarity_search(query, k=3)
+        
+        if not results:
+            return "No relevant memories found"
+            
+        formatted_results = []
+        for i, doc in enumerate(results, 1):
+            metadata = doc.metadata
+            title = metadata.get('title', 'Untitled')
+            timestamp = metadata.get('timestamp_readable', 'No timestamp')
+            formatted_results.append(f"{i}. {title} [{timestamp}]:\n{doc.page_content}\n")
+            
+        return "\n".join(formatted_results)
+        
+    except Exception as e:
+        return f"Error searching memories: {str(e)}"
+
 class Agent:
     def __init__(self):
         # Initialize core components
@@ -125,7 +223,22 @@ class Agent:
             Tool(
                 name="EditContext",
                 func=edit_context,
-                description="Edit the context file. Use format 'header|content' where header must be one of: persona, human, context_notes. Example: 'persona|I am a helpful AI assistant'. Use this to update your persona, your knowledge about the human, or your working notes."
+                description="Edit the context file. Use format 'header|content' where header must be one of: persona, human, context_notes. Example: 'persona|I am a helpful AI assistant'. Use this to update your persona, your knowledge about the human, or your working notes. Keep context_notes brief and consider moving longer content to manual memory."
+            ),
+            Tool(
+                name="InitializeManualMemory",
+                func=initialize_manual_memory,
+                description="Initialize or check your long-term manual memory storage system. Run this at startup to ensure your memory system is ready. This is like preparing your permanent notebook."
+            ),
+            Tool(
+                name="WriteToMemory",
+                func=write_to_manual_memory,
+                description="Store important information in your long-term manual memory. Use format 'title|content'. Include keywords and context in your content to make future retrieval easier. Use this when information is too detailed for context_notes or when you want to preserve something for future reference. Think of this as writing in your permanent notebook with good indexing."
+            ),
+            Tool(
+                name="SearchMemory",
+                func=search_manual_memory,
+                description="Search through your long-term manual memory storage. Input any search query to find relevant stored memories. Use this to recall detailed information you've stored. This searches your permanent notebook for relevant entries."
             )
         ]
 
@@ -133,11 +246,20 @@ class Agent:
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a helpful AI assistant with perfect memory recall and access to tools. At the start of each interaction, you will see three important context sections:
 
-1. "persona": This defines who you are and how you should behave. You should always act according to this persona. You can edit this using the EditContext tool if you need to update your personality or role.
+1. "persona": This defines who you are and how you should behave. You should always act according to this persona.
+2. "human": This describes the human you're working with. Use this to better understand and assist your user.
+3. "context_notes": This is your notepad for important facts or observations. Keep these notes focused and brief. When they grow too long or contain detailed information you might need later, move appropriate content to your manual memory storage using the WriteToMemory tool.
 
-2. "human": This describes the human you're working with. Use this to better understand and assist your user. You can update this section using EditContext as you learn more about them.
+You have two memory systems:
+1. Context Notes: Your quick-access notepad for current, brief information
+2. Manual Memory: Your permanent notebook for detailed information, important facts, and anything you might need to recall later
 
-3. "context_notes": This is your notepad for important facts or observations. You can edit these notes using the EditContext tool, but keep them focused and brief. Use this as your working memory for important information.
+Memory Management Strategy:
+- Keep context_notes brief and current
+- When context_notes grow long, consider what to move to manual memory
+- Use WriteToMemory to store important information with good keywords and context
+- Use SearchMemory to recall stored information when needed
+- Always include clear titles and detailed context when storing memories to make future retrieval easier
 
 You have access to the following tools:
 
