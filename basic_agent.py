@@ -19,10 +19,15 @@ import atexit
 import logging
 from datetime import datetime
 import time
+from langchain_core.runnables import RunnableWithMessageHistory
+from langchain_core.prompts import ChatPromptTemplate
+from operator import itemgetter
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import BaseChatMessageHistory
 
 # Constants
 MAX_CONVERSATION_TOKENS = 8000
-MODEL_SELECTION = "gpt-4"
+MODEL_SELECTION = "gpt-4o"
 
 # Define log filename with timestamp (using UTC)
 LOG_FILENAME = f"agent_conversation_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_UTC.log"
@@ -129,6 +134,25 @@ def signal_handler(sig, frame):
     cleanup()
     sys.exit(0)
 
+class InMemoryHistory(BaseChatMessageHistory):
+    """Simple in-memory message store."""
+    def __init__(self):
+        self.messages = []
+
+    def add_message(self, message):
+        self.messages.append(message)
+
+    def clear(self):
+        self.messages = []
+
+    @property
+    def messages(self):
+        return self.messages
+
+def get_session_history() -> BaseChatMessageHistory:
+    """Returns a new chat message history instance."""
+    return ChatMessageHistory()
+
 # Initialize memory with token limit
 memory = ConversationSummaryBufferMemory(
     llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
@@ -140,86 +164,57 @@ memory = ConversationSummaryBufferMemory(
 # Initialize database
 vectordb = initialize_database(clear=False)
 
+# Replace the ConversationChain with RunnableWithMessageHistory
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful AI assistant with perfect memory recall."),
+    MessagesPlaceholder(variable_name="history"),
+    ("human", "{input}")
+])
+
+chain = prompt | ChatOpenAI(model_name=MODEL_SELECTION, temperature=0)
+conversation = RunnableWithMessageHistory(
+    chain,
+    get_session_history,
+    input_messages_key="input",
+    history_messages_key="history"
+)
+
 def interact_with_agent(user_input):
     """Core interaction function with basic token monitoring."""
     try:
-        # Log pre-interaction memory state
         log_memory_stats()
         
         current_timestamp = datetime.utcnow()
         timestamp_str = current_timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')
         
-        # Retrieve relevant past conversations
-        db_size = vectordb._collection.count()
-        k = max(1, min(5, db_size))
-        relevant_history = vectordb.similarity_search(user_input, k=k) if db_size > 0 else []
+        # Get relevant history
+        relevant_history = vectordb.similarity_search(user_input, k=3) if vectordb._collection.count() > 0 else []
         
-        # Combine current conversation with relevant history
-        full_context = f"Current interaction:\n{timestamp_str}\nUser: {user_input}"
+        # Prepare context
+        context = f"[{timestamp_str}]\nUser: {user_input}"
         if relevant_history:
-            full_context = (
-                "Relevant past information:\n" +
-                "\n".join([doc.page_content for doc in relevant_history]) +
-                "\n\n" + full_context
-            )
-
-        # Get response from agent
-        logging.info("\n=== FULL CONTEXT FOR AGENT ===")
-        logging.info(f"Number of relevant history items: {len(relevant_history)}")
-        logging.info(f"Full context being sent to agent:\n{full_context}")
-        logging.info("================================")
-
-        conversation = ConversationChain(
-            llm=ChatOpenAI(model_name=MODEL_SELECTION, temperature=0),
-            prompt=ChatPromptTemplate.from_messages([
-                ("system", "You are a helpful AI assistant with perfect memory recall."),
-                MessagesPlaceholder(variable_name="history"),
-                ("human", "{input}")
-            ]),
-            memory=memory
-        )
-        response = conversation.predict(input=full_context)
+            context = "Past context:\n" + "\n".join(doc.page_content for doc in relevant_history) + "\n\n" + context
         
-        # Create the complete interaction record
-        new_interaction = (
-            f"[{current_timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')}]\n"
-            f"User: {user_input}\n"
-            f"Agent: {response}"
+        # Get response using the new pattern
+        response = conversation.invoke(
+            {"input": context},
+            config={"configurable": {"session_id": "default"}}
         )
-        interaction_hash = get_text_hash(new_interaction)
-
-        # Check for duplicates and store
-        existing_entries = vectordb.similarity_search(new_interaction, k=1)
-        is_duplicate = any(entry.page_content.strip() == new_interaction.strip() 
-                         for entry in existing_entries)
-
-        if not is_duplicate:
-            logging.info("\n=== STORING NEW UNIQUE INTERACTION ===")
-            logging.info(f"Interaction Hash: {interaction_hash}")
-            logging.info(f"New Interaction:\n{new_interaction}")
-            logging.info("====================================")
-            
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            texts = text_splitter.split_text(new_interaction)
-            metadatas = [{
-                "hash": interaction_hash,
+        response_text = response.content if hasattr(response, 'content') else str(response)
+        
+        # Store interaction
+        new_interaction = f"[{timestamp_str}]\nUser: {user_input}\nAgent: {response_text}"
+        vectordb.add_texts(
+            texts=[new_interaction],
+            metadatas=[{
                 "timestamp": current_timestamp.isoformat(),
-                "timestamp_readable": current_timestamp.strftime('%d/%m/%Y UTC %H:%M:%S')
-            } for _ in texts]
-            
-            vectordb.add_texts(texts, metadatas=metadatas)
-            
-            if not verify_database_entry(new_interaction):
-                logging.error("Failed to verify database entry - attempting retry")
-                vectordb.add_texts(texts, metadatas=metadatas)
-
-        # Update conversation memory
-        memory.save_context({"input": user_input}, {"output": response})
+                "timestamp_readable": timestamp_str
+            }]
+        )
         
-        # Log post-interaction memory state
         log_memory_stats()
-
-        return response
+        
+        return response_text
         
     except Exception as e:
         logging.error(f"Interaction error: {str(e)}")
